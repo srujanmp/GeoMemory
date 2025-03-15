@@ -1,11 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, Button, Alert, StyleSheet, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, Button, Alert, StyleSheet, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocationTracker } from '../../hooks/useLocationTracker';
 
-// Configure Notifications once at the top level - remove the duplicate in useEffect
+// Configure Notifications
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -14,15 +14,63 @@ Notifications.setNotificationHandler({
   }),
 });
 
+// Get place name from coordinates
+const getPlaceDetails = async (latitude: number, longitude: number) => {
+  try {
+    const response = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`,
+      {
+        headers: {
+          'User-Agent': 'GeoMemoryApp/1.0 (contact@geomemory.app)', // Use your app name & email
+        },
+      }
+    );
+    
+    if (!response.ok) {
+      console.warn(`Place API response not OK: ${response.status}`);
+      return 'Unknown Location';
+    }
+    
+    const data = await response.json();
+    return data.display_name || 'Unknown Location';
+  } catch (err) {
+    console.error('Failed to get place:', err);
+    return 'Unknown Location';
+  }
+};
+
 // Main Screen
 export default function HomeScreen() {
   const { location, errorMsg, fetchLocation, lastFetchTime } = useLocationTracker();
   const [noteText, setNoteText] = useState('');
   const [notificationPermission, setNotificationPermission] = useState(false);
-  const notificationListener = useRef<any>();
-  const responseListener = useRef<any>();
+  const [currentPlace, setCurrentPlace] = useState<string>('');
+  const [isLoadingPlace, setIsLoadingPlace] = useState<boolean>(false);
+  
+  // Update place name whenever location changes
+  useEffect(() => {
+    const updatePlaceName = async () => {
+      if (location) {
+        setIsLoadingPlace(true);
+        try {
+          const placeName = await getPlaceDetails(
+            location.coords.latitude,
+            location.coords.longitude
+          );
+          setCurrentPlace(placeName);
+        } catch (error) {
+          console.error('Error getting place name:', error);
+          setCurrentPlace('Location name unavailable');
+        } finally {
+          setIsLoadingPlace(false);
+        }
+      }
+    };
+    
+    updatePlaceName();
+  }, [location]);
 
-  // Test notification function - add this to verify notifications work
+  // Test notification function
   const testNotification = async () => {
     if (!notificationPermission) {
       Alert.alert("Permission Required", "Please grant notification permissions first");
@@ -51,14 +99,11 @@ export default function HomeScreen() {
     (async () => {
       // Check and request permissions if needed
       const { status: existingStatus } = await Notifications.getPermissionsAsync();
-      console.log("Current notification permission status:", existingStatus);
       
       let finalStatus = existingStatus;
       if (existingStatus !== 'granted') {
-        console.log("Requesting notification permissions...");
         const { status } = await Notifications.requestPermissionsAsync();
         finalStatus = status;
-        console.log("New notification permission status:", status);
       }
       
       setNotificationPermission(finalStatus === 'granted');
@@ -72,11 +117,11 @@ export default function HomeScreen() {
     })();
 
     // Set up notification listeners
-    notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
+    const notificationListener = Notifications.addNotificationReceivedListener(notification => {
       console.log("Notification received:", notification);
     });
 
-    responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
+    const responseListener = Notifications.addNotificationResponseReceivedListener(response => {
       console.log("Notification response:", response);
       if (response.notification.request.content.data?.type === 'memory_reminder') {
         Alert.alert(
@@ -100,8 +145,8 @@ export default function HomeScreen() {
 
     // Cleanup listeners on unmount
     return () => {
-      Notifications.removeNotificationSubscription(notificationListener.current);
-      Notifications.removeNotificationSubscription(responseListener.current);
+      Notifications.removeNotificationSubscription(notificationListener);
+      Notifications.removeNotificationSubscription(responseListener);
     };
   }, []);
 
@@ -186,6 +231,19 @@ export default function HomeScreen() {
         <Text style={styles.sectionTitle}>Current Location</Text>
         {location ? (
           <>
+            {/* Place name display */}
+            <View style={styles.placeContainer}>
+              <Text style={styles.placeLabel}>Current Place:</Text>
+              {isLoadingPlace ? (
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator size="small" color="#007AFF" />
+                  <Text style={styles.loadingText}>Loading place name...</Text>
+                </View>
+              ) : (
+                <Text style={styles.placeText}>{currentPlace}</Text>
+              )}
+            </View>
+            
             <Text style={styles.text}>
               Lat: {location.coords.latitude.toFixed(6)}, Lng: {location.coords.longitude.toFixed(6)}
             </Text>
@@ -219,12 +277,10 @@ export default function HomeScreen() {
       </View>
 
       {/* Buttons Section */}
-      <Text>testing tools:</Text>
       <View style={styles.buttonContainer}>
-        <Button title="Refresh Location (forced)" onPress={fetchLocation} />
+        <Button title="Refresh Location" onPress={fetchLocation} />
       </View>
 
-      {/* Test Notification Button - Add this to troubleshoot */}
       <View style={styles.buttonContainer}>
         <Button title="Test Notification" onPress={testNotification} color="#8a2be2" />
       </View>
@@ -263,6 +319,31 @@ const styles = StyleSheet.create({
     fontWeight: 'bold', 
     marginBottom: 10, 
     color: '#333' 
+  },
+  placeContainer: {
+    marginBottom: 10
+  },
+  placeLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#555',
+    marginBottom: 4
+  },
+  placeText: {
+    fontSize: 16,
+    color: '#333',
+    marginBottom: 8,
+    fontWeight: '500'
+  },
+  loadingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 4
+  },
+  loadingText: {
+    fontSize: 14,
+    color: '#666',
+    marginLeft: 8
   },
   text: { 
     fontSize: 16, 
